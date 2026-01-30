@@ -60,7 +60,7 @@ source("generate_sim_plot.R")
 ## Citation
 If you use this code or method, please cite:
 
-> Abordo, J.P. & Nads, A.A. (2025). Handling pandemic-induced distribution shifts in TB forecasting: A hybrid EEMD-NARNN model with adaptive conformal inference. *Infectious Disease Modelling*.
+> Abordo, J.P. & Nads, A.A. (2025). Adaptive Conformal Inference for Robust Tuberculosis Forecasting Under Pandemic-Induced Distribution Shifts. *Infectious Disease Modelling*.
 
 ## License
 MIT License. See `LICENSE` file for details.
