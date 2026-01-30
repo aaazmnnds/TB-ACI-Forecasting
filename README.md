@@ -1,12 +1,12 @@
-# Handling Pandemic-Induced Distribution Shifts in TB Forecasting
-**A Hybrid EEMD-NARNN Model with Adaptive Conformal Inference**
+# Adaptive Conformal Inference for Robust Tuberculosis Forecasting
+**Under Pandemic-Induced Distribution Shifts**
 
 **Authors:** Joseph P. Abordo (UP Cebu) & Azman A. Nads (MSU Tawi-Tawi / Hiroshima University)
 
 ---
 
 ## Overview
-This repository contains the official Replication Package for the study: *"Handling pandemic-induced distribution shifts in TB forecasting: A hybrid EEMD-NARNN model with adaptive conformal inference"*.
+This repository contains the official Replication Package for the study: *"Adaptive Conformal Inference for Robust Tuberculosis Forecasting Under Pandemic-Induced Distribution Shifts"*.
 
 The code implements a robust forecasting framework that integrates:
 1.  **EEMD**: To decompose non-stationary TB incidence into minimal oscillatory modes.
