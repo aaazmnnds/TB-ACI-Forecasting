@@ -23,10 +23,6 @@ The code implements a robust forecasting framework that integrates:
 - **`generate_manuscript_plots.R`**: Dedicated script to generate high-quality **PDF/Vector figures** (Figures 1-6) as presented in the manuscript.
 - **`generate_sim_plot.R`**: Visualization script for the simulation results.
 
-### Manuscript
-- **`manuscript/Manuscript_Epidemics.tex`**: LaTeX source for the manuscript formatted for the *Epidemics* journal (Elsevier).
-- **`manuscript/figures/`**: High-quality vector graphics (PDF) for all figures.
-
 ## Data Availability
 **Note on Privacy:** The raw monthly TB surveillance data used in the manuscript (Poro, Cebu) contains sensitive health information and **cannot be shared publicly**. 
 
@@ -59,11 +55,7 @@ source("03_Simulation_Validation.R")
 ## Citation
 If you use this code or method, please cite:
 
-<<<<<<< HEAD
-> Abordo, J.P. & Nads, A.A. (2025). Adaptive Conformal Inference for Robust Tuberculosis Forecasting Under Pandemic-Induced Distribution Shifts. *Infectious Disease Modelling*.
-=======
 > Abordo, J.P. & Nads, A.A. (2025). Adaptive Conformal Inference for Robust Tuberculosis Forecasting Under Pandemic-Induced Distribution Shifts. *Epidemics* (Submitted).
->>>>>>> 7c8a762 (Update repository to reflect Epidemics journal submission and vector graphics)
 
 ## License
 MIT License. See `LICENSE` file for details.
