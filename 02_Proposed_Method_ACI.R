@@ -323,14 +323,14 @@ p_roll <- ggplot(plot_df, aes(x = DateObj, y = Coverage, color = Model, linetype
         panel.grid.minor = element_blank()
     )
 
-# Save
-ggsave("plot_coverage_evolution.png",
+# Save Fig 3: Coverage Evolution
+ggsave("Fig3_Coverage_Evolution.png",
     p_roll,
     width = 10, height = 6,
     dpi = 300, bg = "white"
 )
 
-ggsave("plot_coverage_evolution.pdf",
+ggsave("Fig3_Coverage_Evolution.pdf",
     p_roll,
     width = 10, height = 6,
     device = cairo_pdf
@@ -385,8 +385,9 @@ p_covid <- ggplot(covid_df_combined, aes(x = DateObj)) +
         axis.text.x = element_text(angle = 45, hjust = 1)
     )
 
-ggsave("plot_covid_detail.png", p_covid, width = 10, height = 5, dpi = 300, bg = "white")
-ggsave("plot_covid_detail.pdf", p_covid, width = 10, height = 5, device = cairo_pdf)
+# Save Fig 5: COVID Detail
+ggsave("Fig5_Covid_Detail.png", p_covid, width = 10, height = 5, dpi = 300, bg = "white")
+ggsave("Fig5_Covid_Detail.pdf", p_covid, width = 10, height = 5, device = cairo_pdf)
 
 
 # Add DateObj
@@ -418,7 +419,9 @@ p_aci <- ggplot(results_df, aes(x = DateObj)) +
         plot.title = element_text(hjust = 0.5, face = "bold"),
         plot.subtitle = element_text(hjust = 0.5)
     )
-ggsave("plot_ACI_forecast_with_intervals.png", p_aci, width = 10, height = 6, dpi = 300, bg = "white")
+# Save Fig 2: Incidence Forecast
+ggsave("Fig2_Incidence_Forecast.png", p_aci, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave("Fig2_Incidence_Forecast.pdf", p_aci, width = 10, height = 6, device = cairo_pdf)
 
 results_df$Width <- results_df$Upper - results_df$Lower
 p_width <- ggplot(results_df, aes(x = DateObj, y = Width)) +
@@ -426,4 +429,6 @@ p_width <- ggplot(results_df, aes(x = DateObj, y = Width)) +
     labs(title = "Adaptive Interval Width", x = "Year", y = "Interval Width") +
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-ggsave("plot_ACI_interval_width.png", p_width, width = 10, height = 4, dpi = 300, bg = "white")
+# Save Fig 4: Interval Width
+ggsave("Fig4_Interval_Width.png", p_width, width = 10, height = 4, dpi = 300, bg = "white")
+ggsave("Fig4_Interval_Width.pdf", p_width, width = 10, height = 4, device = cairo_pdf)

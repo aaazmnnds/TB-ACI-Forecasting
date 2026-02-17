@@ -125,7 +125,7 @@ p_hist <- ggplot(df, aes(x = All)) +
     scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
 
 # Save high-resolution
-ggsave("plot_simulation_histogram.png",
+ggsave("Fig6_Simulation_Histogram.png",
     p_hist,
     width = 10,
     height = 6,
@@ -134,7 +134,7 @@ ggsave("plot_simulation_histogram.png",
 )
 
 # Also save as PDF for vector graphics (journals prefer this)
-ggsave("plot_simulation_histogram.pdf",
+ggsave("Fig6_Simulation_Histogram.pdf",
     p_hist,
     width = 10,
     height = 6,
