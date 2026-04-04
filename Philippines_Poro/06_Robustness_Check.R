@@ -1,10 +1,9 @@
-# 04_Sensitivity_Analysis.R
-# STEP 1: Generate Forecast Cache & Baseline Sensitivity
+# 06_Robustness_Check.R
+# STEP 3: Robustness Check (Sensitivity around Optimal Params)
 
 library(tidyverse)
 library(lubridate)
 library(forecast)
-
 library(zoo)
 
 # Robust Path Resolution
@@ -36,12 +35,13 @@ safe_eemd <- function(x, ...) {
     }
 }
 
-set.seed(2025)
+set.seed(2026)
 
 # 1. Load Data
-csv_path <- "../../tb_monthly_incidence_ph_2002_2023_per100k.csv"
-if (!file.exists(csv_path)) csv_path <- "../tb_monthly_incidence_ph_2002_2023_per100k.csv"
-if (!file.exists(csv_path)) csv_path <- "tb_monthly_incidence_ph_2002_2023_per100k.csv"
+csv_path <- "tb_monthly_incidence_ph_2002_2023_per100k.csv"
+if (!file.exists(csv_path) && file.exists(file.path(results_dir, csv_path))) {
+    csv_path <- file.path(results_dir, csv_path)
+}
 if (!file.exists(csv_path)) stop("Data file not found.")
 
 tb <- read.csv(csv_path)
@@ -61,13 +61,13 @@ if (file.exists(best_params_file)) {
     lambda_star <- optuna_results$value[optuna_results$parameter == "lambda"]
     window_star <- optuna_results$value[optuna_results$parameter == "window"]
 
-    # Test robustness around optimum (Cover full Optuna search space)
-    lambdas <- c(0.001, 0.01, 0.0106, 0.05, 0.1, 0.2, 0.3)
-    windows <- c(20, 30, 41, 50, 60, 80, 100)
+    # Test robustness around optimum
+    lambdas <- c(lambda_star * 0.7, lambda_star, lambda_star * 1.3)
+    windows <- c(window_star - 20, window_star, window_star + 20)
     # Ensure window is valid integer
     windows <- as.integer(pmax(10, windows))
 } else {
-    cat("Exploring baseline grid (Run 04_Optuna_Parameter_Optimization.R for targeted check)...\n")
+    cat("Exploring baseline grid (Run 05_Optuna_Parameter_Optimization.R for targeted check)...\n")
     lambdas <- c(0.01, 0.05, 0.1, 0.2)
     windows <- c(20, 40, 60)
 }
@@ -128,16 +128,9 @@ if (!file.exists(residual_file)) {
     }
     residual_data <- list(Forecast = base_fcs, Actual = actuals, Date = dates_test)
     saveRDS(residual_data, residual_file)
-    # Also save as CSV for Python standalone scripts
-    write.csv(as.data.frame(residual_data), file.path(results_dir, "base_forecast_residuals.csv"), row.names = FALSE)
 } else {
     cat("Loading cached base forecasts...\n")
     residual_data <- readRDS(residual_file)
-    # Ensure CSV exists even if loading from RDS
-    csv_file <- file.path(results_dir, "base_forecast_residuals.csv")
-    if (!file.exists(csv_file)) {
-        write.csv(as.data.frame(residual_data), csv_file, row.names = FALSE)
-    }
     base_fcs <- residual_data$Forecast
     actuals <- residual_data$Actual
     dates_test <- residual_data$Date
@@ -197,12 +190,12 @@ for (W in windows) {
         )
         sensitivity_grid <- rbind(sensitivity_grid, grid_row)
 
-        # Reaction Lag Data: March 2020 - Dec 2021 (22 months)
-        reaction_indices <- 39:60
-        cum_cov_shock <- cumsum(covered_vec[reaction_indices]) / (1:length(reaction_indices))
+        # Reaction Lag Data: March 2020 - March 2021 (12 months)
+        reaction_indices <- 39:50
+        cum_cov_shock <- cumsum(covered_vec[reaction_indices]) / seq_along(reaction_indices)
 
         rolling_coverage_data <- rbind(rolling_coverage_data, data.frame(
-            MonthOffset = 1:length(reaction_indices),
+            MonthOffset = seq_along(reaction_indices),
             CumulativeCoverage = cum_cov_shock,
             Lambda = as.factor(L),
             Window = as.factor(W)
@@ -224,34 +217,51 @@ cat("--------------------------------------------------\n")
 p_grid <- ggplot(sensitivity_grid, aes(x = as.factor(Lambda), y = as.factor(Window), fill = COVID_PICP)) +
     geom_tile() +
     scale_fill_gradient2(low = "red", mid = "yellow", high = "green", midpoint = 0.90) +
-    geom_text(aes(label = sprintf("%.1f%%", COVID_PICP * 100))) +
+    geom_text(aes(label = sprintf("%.1f%%", COVID_PICP * 100)), fontface = "bold", color = "black", size = 4) +
     labs(
-        title = "Sensitivity: COVID Period Coverage by ACI Hyperparameters",
-        x = expression(paste("Learning Rate (", lambda, ")")), y = "Window Size (Months)", fill = "Coverage"
+        title = "Fig 8: Sensitivity: COVID Period Coverage by ACI Hyperparameters",
+        x = expression(paste("Learning Rate (", lambda, ")")), y = "Window Size (Months)", fill = "Coverage Probability"
     ) +
-    theme_minimal()
+    theme_minimal(base_size = 11) +
+    theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.title = element_text(face = "bold"),
+        panel.grid.minor = element_blank(),
+        plot.margin = margin(t = 10, r = 10, b = 10, l = 10)
+    )
 
-ggsave(file.path(results_dir, "plot_sensitivity_grid_cov.png"), p_grid, width = 8, height = 5)
+ggsave(file.path(results_dir, "Fig8_Sensitivity_Grid.png"), p_grid, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave(file.path(results_dir, "Fig8_Sensitivity_Grid.pdf"), p_grid, width = 10, height = 6)
 
 # Plot 2: Reaction Lag
-p_lag <- ggplot(
-    rolling_coverage_data %>% filter(Lambda %in% c("0.001", "0.0106", "0.1") & Window %in% c(20, 41, 100)),
-    aes(x = MonthOffset, y = CumulativeCoverage, color = as.factor(Window), group = Window, linetype = as.factor(Window))
-) +
-    geom_line(linewidth = 1.2, alpha = 0.8) +
-    geom_point() +
-    geom_hline(yintercept = 0.95, linetype = "dashed") +
-    scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
-    facet_wrap(~Lambda, labeller = label_both) +
-    labs(
-        title = "Reaction Lag Post-Shock (March 2020 - Dec 2021)",
-        subtitle = expression(paste("Effect of Window Size across Learning Rates over a 22-month window. (", lambda, ")")),
-        x = "Months Since Pandemic Onset", y = "Cumulative Coverage", color = "Window", linetype = "Window"
-    ) +
-    theme_minimal() +
-    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-          plot.subtitle = element_text(hjust = 0.5))
+# Check if window_star exists, otherwise fallback to 60 for safety
+if (!exists("window_star")) window_star <- 22
 
-ggsave(file.path(results_dir, "plot_sensitivity_reaction_lag.png"), p_lag, width = 10, height = 5)
+p_lag <- ggplot(
+    rolling_coverage_data %>% filter(Window == as.character(window_star)),
+    aes(x = MonthOffset, y = CumulativeCoverage, color = Lambda, group = Lambda)
+) +
+    geom_line(linewidth = 1.2) +
+    geom_point(size = 2) +
+    geom_hline(aes(yintercept = 0.95, linetype = "Target (95%)"), color = "black") +
+    scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+    scale_color_viridis_d(option = "viridis", name = expression(lambda)) +
+    scale_linetype_manual(name = "Targets", values = c("Target (95%)" = "dashed")) +
+    labs(
+        title = "Fig 9: Reaction Lag Analysis: Cumulative Coverage Post-Shock",
+        subtitle = sprintf("Comparison of adaptation speeds across learning rates (Optimal Window = %d)", window_star),
+        x = "Months Since Pandemic Onset (March 2020)", y = "Cumulative Coverage"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10, color = "gray30"),
+        legend.title = element_text(face = "bold"),
+        panel.grid.minor = element_blank(),
+        plot.margin = margin(t = 10, r = 10, b = 10, l = 10)
+    )
+
+ggsave(file.path(results_dir, "Fig9_Reaction_Lag.png"), p_lag, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave(file.path(results_dir, "Fig9_Reaction_Lag.pdf"), p_lag, width = 10, height = 6)
 
 cat("\nSensitivity Analysis Complete. Output files generated.\n")

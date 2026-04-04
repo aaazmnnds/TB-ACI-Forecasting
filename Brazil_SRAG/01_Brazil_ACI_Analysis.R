@@ -33,7 +33,7 @@ if (!has_eemd) {
     cat("Warning: Rlibeemd not found. Falling back to auto.arima for all components.\n")
 }
 
-set.seed(2025)
+set.seed(2026)
 
 # 1. Data Loading
 csv_path <- file.path(results_dir, "brazil_sivep_gripe_extended_2025.csv") # Output from 00_Data_Prep_SRAG.R

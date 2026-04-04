@@ -28,7 +28,7 @@ cat(sprintf("Using results directory: %s\n", normalizePath(results_dir)))
 
 if (!dir.exists(results_dir)) dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
 
-set.seed(2025)
+set.seed(2026)
 
 # 1) Read data + build ts
 csv_path <- "tb_monthly_incidence_ph_2002_2023_per100k.csv"

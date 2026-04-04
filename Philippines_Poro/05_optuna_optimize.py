@@ -35,7 +35,7 @@ OUTPUT_PARAMS = RESULTS_DIR / "best_parameters.csv"
 OUTPUT_HISTORY = RESULTS_DIR / "optimization_history.csv"
 
 # Seeding and Logging
-np.random.seed(2025)
+np.random.seed(2026)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 def set_seed(seed=2025):
