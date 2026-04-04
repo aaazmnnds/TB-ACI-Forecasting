@@ -3,15 +3,39 @@
 library(tidyverse)
 library(lubridate)
 library(forecast)
-library(Rlibeemd)
+has_eemd <- require("Rlibeemd", quietly = TRUE)
+if (!has_eemd) {
+  warning("Rlibeemd package not found. Falling back to auto.arima.")
+}
 library(bsts)
 library(zoo)
 
-set.seed(123123)
+# Robust Path Resolution
+find_results_dir <- function() {
+  if (dir.exists("results")) {
+    return("results")
+  }
+  if (dir.exists("../../results")) {
+    return("../../results")
+  }
+  if (dir.exists("../results")) {
+    return("../results")
+  }
+  return("results") # Fallback
+}
+results_dir <- find_results_dir()
+cat(sprintf("Using results directory: %s\n", normalizePath(results_dir)))
+
+if (!dir.exists(results_dir)) dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
+
+set.seed(2025)
 
 # 1) Read data + build ts
-tb <- read.csv("tb_monthly_incidence_ph_2002_2023_per100k.csv")
-tb
+csv_path <- "tb_monthly_incidence_ph_2002_2023_per100k.csv"
+if (!file.exists(csv_path) && file.exists(file.path(results_dir, csv_path))) {
+  csv_path <- file.path(results_dir, csv_path)
+}
+tb <- read.csv(csv_path)
 
 y <- tb$Incidence_per_100k
 y_ts <- ts(
@@ -132,24 +156,34 @@ fit_narnn <- nnetar(train_z, repeats = 30, maxit = 800)
 narnn_fc <- itf(as.numeric(forecast(fit_narnn, h = h)$mean))
 
 # ----------------------------
-# 6) BAYESIAN BSTS (Option A, pure state-space)
+# 7) BAYESIAN BSTS (Option A, pure state-space)
 # ----------------------------
-ss <- AddLocalLinearTrend(list(), train_z)
-ss <- AddSeasonal(ss, train_z, nseasons = 12)
+if (requireNamespace("bsts", quietly = TRUE)) {
+  library(bsts)
+  ss <- AddLocalLinearTrend(list(), train_z)
+  ss <- AddSeasonal(ss, train_z, nseasons = 12)
 
-niter <- 3000
-burn <- floor(0.2 * niter)
+  niter <- 3000
+  burn <- floor(0.2 * niter)
 
-bsts_fit <- bsts(train_z, state.specification = ss, niter = niter)
+  set.seed(123)
+  bsts_fit <- bsts(train_z, state.specification = ss, niter = niter)
 
-bsts_pred <- predict(bsts_fit,
-  horizon = h, burn = burn,
-  quantiles = c(0.025, 0.5, 0.975)
-)
+  bsts_pred <- predict(bsts_fit,
+    horizon = h, burn = burn,
+    quantiles = c(0.025, 0.5, 0.975)
+  )
 
-bsts_mean_fc <- itf(as.numeric(bsts_pred$mean))
-bsts_q025 <- itf(as.numeric(bsts_pred$interval[1, ]))
-bsts_q975 <- itf(as.numeric(bsts_pred$interval[2, ]))
+  bsts_mean_fc <- itf(as.numeric(bsts_pred$mean))
+  bsts_q025 <- itf(as.numeric(bsts_pred$interval[1, ]))
+  bsts_q975 <- itf(as.numeric(bsts_pred$interval[2, ]))
+} else {
+  cat("Warning: bsts package not found. Using SARIMA for baseline interval comparison.\n")
+  bsts_mean_fc <- sarima_fc
+  # Estimation using SARIMA properties
+  bsts_q025 <- itf(as.numeric(forecast(fit_sarima, h = h)$lower[, "95%"]))
+  bsts_q975 <- itf(as.numeric(forecast(fit_sarima, h = h)$upper[, "95%"]))
+}
 
 # Hybrid interval layer (borrow BSTS width)
 delta_low <- bsts_mean_fc - bsts_q025
@@ -182,7 +216,7 @@ metrics_holdout <- tibble(
 ) %>% arrange(RMSE)
 
 print(metrics_holdout)
-write_csv(metrics_holdout, "metrics_holdout_onepiece.csv")
+write_csv(metrics_holdout, file.path(results_dir, "metrics_holdout_onepiece.csv"))
 
 # ----------------------------
 # 8) ROLLING-ORIGIN EVALUATION (robust)
@@ -283,8 +317,8 @@ roll_summary <- roll_tbl %>%
 
 print(roll_summary)
 
-write_csv(roll_tbl, "metrics_rolling_onepiece.csv")
-write_csv(roll_summary, "metrics_rolling_summary_onepiece.csv")
+write_csv(roll_tbl, file.path(results_dir, "metrics_rolling_onepiece.csv"))
+write_csv(roll_summary, file.path(results_dir, "metrics_rolling_summary_onepiece.csv"))
 
 # ----------------------------
 # 9) Forecast dataframe (holdout) + Date-safe plotting
@@ -312,7 +346,7 @@ fc_df <- tibble(
   BSTS_U95 = bsts_q975
 )
 
-write_csv(fc_df, "forecasts_holdout_onepiece.csv")
+write_csv(fc_df, file.path(results_dir, "forecasts_holdout_onepiece.csv"))
 
 obs_df <- tibble(
   Date = as.Date(tb$Date),

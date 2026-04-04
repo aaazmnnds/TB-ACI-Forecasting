@@ -8,13 +8,37 @@
 library(tidyverse)
 library(lubridate)
 library(forecast)
-library(Rlibeemd)
+has_eemd <- require("Rlibeemd", quietly = TRUE)
+if (!has_eemd) {
+    cat("Warning: Rlibeemd not found. Falling back to auto.arima for all components.\n")
+}
 library(zoo)
+
+# Robust Path Resolution
+find_results_dir <- function() {
+    if (dir.exists("results")) {
+        return("results")
+    }
+    if (dir.exists("../../results")) {
+        return("../../results")
+    }
+    if (dir.exists("../results")) {
+        return("../results")
+    }
+    return("results") # Fallback
+}
+results_dir <- find_results_dir()
+cat(sprintf("Using results directory: %s\n", normalizePath(results_dir)))
+
+if (!dir.exists(results_dir)) dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
 
 set.seed(2025)
 
 # 1. Data Loading
 csv_path <- "tb_monthly_incidence_ph_2002_2023_per100k.csv"
+if (!file.exists(csv_path) && file.exists(file.path(results_dir, csv_path))) {
+    csv_path <- file.path(results_dir, csv_path)
+}
 tb <- read.csv(csv_path)
 
 if ("Date" %in% names(tb)) {
@@ -40,103 +64,163 @@ n_train_init <- 180
 results_df <- data.frame()
 
 # ACI Setup
-# Mismatch Fix #2: lambda = 0.05
-# Mismatch Fix #4: variable naming (gamma -> lambda)
+best_params_file <- file.path(results_dir, "best_parameters.csv")
+if (file.exists(best_params_file)) {
+    cat("Loading optimized parameters...\n")
+    opt_df <- read.csv(best_params_file)
+    lambda <- opt_df$value[opt_df$parameter == "lambda"]
+    W <- opt_df$value[opt_df$parameter == "window"]
+    cat(sprintf("Using λ=%.4f, W=%d\n", lambda, W))
+} else {
+    lambda <- 0.05
+    W <- 60
+}
 current_alpha <- 0.05
-lambda <- 0.05
 online_scores <- c()
 target_alpha <- 0.05
 
 print(paste("Starting CORRECTED Rolling Evaluation from index:", n_train_init, " (Jan 2017)"))
 
-for (i in n_train_init:(n_total - 1)) {
-    # Current Training Set
-    curr_train_ts <- window(y_ts, end = time(y_ts)[i])
-    train_z <- tf(curr_train_ts)
+# Optimization: Share cache with Script 04
+residual_file <- file.path(results_dir, "base_forecast_residuals.rds")
+if (file.exists(residual_file)) {
+    cat("Loading cached point forecasts from Script 04... (Fast Path)\n")
+    residual_data <- readRDS(residual_file)
+    base_fcs <- residual_data$Forecast
+    actuals_cache <- residual_data$Actual
+    dates_cache <- residual_data$Date
 
-    # Mismatch Fix #5: Ensemble Size = 100
-    ensemble_size_val <- 100
+    for (t in 1:length(base_fcs)) {
+        fc_point <- base_fcs[t]
+        actual_val <- actuals_cache[t]
+        date_val <- dates_cache[t]
 
-    # Hybrid Forecast Step
-    fc_point <- tryCatch(
-        {
-            imfs <- as.matrix(eemd(as.numeric(train_z), noise_strength = 0.2, ensemble_size = ensemble_size_val))
-            K <- ncol(imfs)
-            res <- imfs[, K]
-            high_freq <- rowSums(imfs[, 1:(K - 1)])
-
-            fit_arima <- auto.arima(ts(res, frequency = 12), seasonal = TRUE, approximation = TRUE)
-            fc_resid <- forecast(fit_arima, h = 1)$mean
-
-            # Mismatch Fix #4: NARNN size = 10
-            fit_nn <- nnetar(ts(high_freq, frequency = 12), p = 2, P = 1, size = 10, repeats = 10)
-            fc_high <- forecast(fit_nn, h = 1)$mean
-
-            fc_log <- fc_resid + fc_high
-            itf(as.numeric(fc_log))
-        },
-        error = function(e) {
-            fit_fb <- auto.arima(train_z)
-            itf(as.numeric(forecast(fit_fb, h = 1)$mean))
-        }
-    )
-
-    actual_val <- as.numeric(y_ts[i + 1])
-
-    # ACI Interval Step
-    if (length(online_scores) < 10) {
-        width <- fc_point * 0.2
-    } else {
-        # Mismatch Fix #3: Window Size = Exactly 60
-        if (length(online_scores) > 60) {
-            recent_scores <- tail(online_scores, 60)
+        # ACI Interval Step (Refactored to Log Space)
+        if (length(online_scores) < 10) {
+            width_log <- 0.015
         } else {
-            recent_scores <- online_scores
+            recent_scores <- if (length(online_scores) > W) tail(online_scores, W) else online_scores
+            safe_alpha <- max(0.001, min(0.999, current_alpha))
+            width_log <- quantile(recent_scores, probs = 1 - safe_alpha, names = FALSE)
         }
 
-        safe_alpha <- max(0.001, min(0.999, current_alpha))
-        # Quantile of errors
-        width <- quantile(recent_scores, probs = 1 - safe_alpha, names = FALSE)
+        # Bounds on original scale
+        fc_log_val <- log1p(fc_point)
+        lower_b <- max(0, expm1(fc_log_val - width_log))
+        upper_b <- expm1(fc_log_val + width_log)
+
+        covered <- (actual_val >= lower_b) & (actual_val <= upper_b)
+        err_t <- as.numeric(!covered)
+
+        # Update Alpha in log space
+        current_alpha <- current_alpha + lambda * (0.05 - err_t)
+        current_alpha <- max(0.001, min(0.5, current_alpha))
+
+        # Scores in log space
+        abs_err_log <- abs(log1p(actual_val) - fc_log_val)
+        online_scores <- c(online_scores, abs_err_log)
+
+        results_df <- rbind(results_df, data.frame(
+            Date = date_val, Actual = actual_val, Forecast = fc_point,
+            Lower = lower_b, Upper = upper_b, Alpha_t = current_alpha,
+            Covered = covered, Width = 2 * width_log
+        ))
     }
 
-    lower_bound <- max(0, fc_point - width)
-    upper_bound <- fc_point + width
+    # Save cache for other scripts
+    residual_data <- list(Forecast = results_df$Forecast, Actual = results_df$Actual, Date = results_df$Date)
+    saveRDS(residual_data, residual_file)
+} else {
+    cat("Generating forecasts (Slow Path - Cache will be created for Script 04/05/06)...\n")
+    for (i in n_train_init:(n_total - 1)) {
+        # Current Training Set
+        curr_train_ts <- window(y_ts, end = time(y_ts)[i])
+        train_z <- tf(curr_train_ts)
 
-    covered <- (actual_val >= lower_bound) & (actual_val <= upper_bound)
-    err_t <- as.numeric(!covered)
+        # Mismatch Fix #5: Ensemble Size = 100
+        ensemble_size_val <- 100
 
-    # Update Alpha: alpha_{t+1} = alpha_t + lambda * (target - err)
-    # If err=1 (miss), we need WIDER intervals.
-    # Wider intervals comes from LOWER alpha (higher quantile 1-alpha).
-    # wait. quantile(probs = 1-alpha).
-    # if alpha=0.05, probs=0.95.
-    # if alpha=0.01, probs=0.99 (WIDER).
-    # So to WIDEN, alpha must DECREASE.
-    # Formula: alpha_new = alpha + lambda * (target - err).
-    # If err=1 (miss): alpha + 0.05 * (0.05 - 1) = alpha - 0.0475. Alpha DECREASES. Correct.
+        # Hybrid Forecast Step
+        fc_point <- tryCatch(
+            {
+                imfs <- as.matrix(eemd(as.numeric(train_z), noise_strength = 0.2, ensemble_size = ensemble_size_val))
+                K <- ncol(imfs)
 
-    current_alpha <- current_alpha + lambda * (0.05 - err_t)
-    current_alpha <- max(0.001, min(0.5, current_alpha)) # Clip
+                # Use last 2 components for Low Frequency (Trend + Slow IMFs)
+                low_idx <- (K - 1):K
+                high_idx <- 1:(K - 2)
 
-    abs_err <- abs(actual_val - fc_point)
-    online_scores <- c(online_scores, abs_err)
+                low_freq <- rowSums(as.matrix(imfs[, low_idx]))
+                high_freq <- rowSums(as.matrix(imfs[, high_idx]))
 
-    res_row <- data.frame(
-        Date = time(y_ts)[i + 1],
-        Actual = actual_val,
-        Forecast = fc_point,
-        Lower = lower_bound,
-        Upper = upper_bound,
-        Alpha_t = current_alpha,
-        Covered = covered
-    )
-    results_df <- rbind(results_df, res_row)
+                fit_arima <- auto.arima(ts(low_freq, frequency = 12), seasonal = TRUE, approximation = TRUE)
+                fc_low <- forecast(fit_arima, h = 1)$mean
+
+                # Mismatch Fix #4: Allow nnetar to choose optimal size
+                fit_nn <- nnetar(ts(high_freq, frequency = 12), p = 2, P = 1)
+                fc_high <- forecast(fit_nn, h = 1)$mean
+
+                fc_log <- fc_low + fc_high
+                itf(as.numeric(fc_log))
+            },
+            error = function(e) {
+                fit_fb <- auto.arima(train_z)
+                itf(as.numeric(forecast(fit_fb, h = 1)$mean))
+            }
+        )
+
+        actual_val <- as.numeric(y_ts[i + 1])
+
+        # ACI Interval Step (Refactored to Log Space)
+        if (length(online_scores) < 10) {
+            # Initial heuristic: 20% width (in log space)
+            width_log <- 0.015
+        } else {
+            # Dynamic Window Size W from Optuna
+            recent_scores <- if (length(online_scores) > W) tail(online_scores, W) else online_scores
+            safe_alpha <- max(0.001, min(0.999, current_alpha))
+            # Quantile of errors (in log space)
+            width_log <- quantile(recent_scores, probs = 1 - safe_alpha, names = FALSE)
+        }
+
+        # Bounds on original scale
+        fc_log_val <- log1p(fc_point)
+        lower_bound <- max(0, expm1(fc_log_val - width_log))
+        upper_bound <- expm1(fc_log_val + width_log)
+
+        covered <- (actual_val >= lower_bound) & (actual_val <= upper_bound)
+        err_t <- as.numeric(!covered)
+
+        # Update Alpha in log space: wider intervals (higher probs) means lower alpha
+        current_alpha <- current_alpha + lambda * (0.05 - err_t)
+        current_alpha <- max(0.001, min(0.5, current_alpha))
+
+        # Scores in log space
+        abs_err_log <- abs(log1p(actual_val) - fc_log_val)
+        online_scores <- c(online_scores, abs_err_log)
+
+        res_row <- data.frame(
+            Date = time(y_ts)[i + 1],
+            Actual = actual_val,
+            Forecast = fc_point,
+            Lower = lower_bound,
+            Upper = upper_bound,
+            Alpha_t = current_alpha,
+            Covered = covered,
+            Width = 2 * width_log # Normalized Width for comparison
+        )
+        results_df <- rbind(results_df, res_row)
+    }
+
+    # Save cache for other scripts
+    residual_data <- list(Forecast = results_df$Forecast, Actual = results_df$Actual, Date = results_df$Date)
+    saveRDS(residual_data, residual_file)
 }
 
 # 3. Metrics Calculation
 # Mismatch Fix #6: MPIW/PICP
 picp <- mean(results_df$Covered)
-mpiw <- mean(results_df$Upper - results_df$Lower)
+mpiw <- mean(results_df$Width) # Now reflects log-space stability
 rmse_val <- sqrt(mean((results_df$Actual - results_df$Forecast)^2))
 mae_val <- mean(abs(results_df$Actual - results_df$Forecast))
 
@@ -174,7 +258,7 @@ periodic_metrics <- results_df %>%
 
 cat("\n--- PERIODIC INTERVAL METRICS ---\n")
 print(periodic_metrics)
-write.csv(periodic_metrics, "metrics_aci_periodic.csv")
+write.csv(periodic_metrics, file.path(results_dir, "metrics_aci_periodic.csv"))
 
 # ----------------------------------------------------
 # 5. ROLLING COVERAGE PLOT (Figure 2 Requirement)
@@ -188,9 +272,14 @@ results_df <- results_df %>%
 bsts_roll_cov <- rep(NA, nrow(results_df))
 has_bsts <- FALSE
 
-if (file.exists("forecasts_holdout_counts_then_incidence_fixed.csv")) {
+bsts_path <- file.path(results_dir, "forecasts_holdout_counts_then_incidence_fixed.csv")
+if (!file.exists(bsts_path) && file.exists("forecasts_holdout_counts_then_incidence_fixed.csv")) {
+    bsts_path <- "forecasts_holdout_counts_then_incidence_fixed.csv"
+}
+
+if (file.exists(bsts_path)) {
     try({
-        fc_data <- read.csv("forecasts_holdout_counts_then_incidence_fixed.csv")
+        fc_data <- read.csv(bsts_path)
         if ("BSTS_Inc_L95" %in% names(fc_data) && !all(is.na(fc_data$BSTS_Inc_L95))) {
             # Calculate BSTS Coverage
             # Need to ensure dates align. Assuming row-for-row match since same horizon.
@@ -236,10 +325,10 @@ p_roll <- ggplot(plot_df, aes(x = DateObj, y = Coverage, color = Model, linetype
     # COVID period shading
     annotate(
         "rect",
-        xmin = as.Date("2020-01-01"),
+        xmin = as.Date("2020-03-01"),
         xmax = as.Date("2021-12-31"),
         ymin = -Inf, ymax = Inf,
-        fill = "red", alpha = 0.05
+        fill = "red", alpha = 0.1
     ) +
 
     # Coverage lines
@@ -316,24 +405,25 @@ p_roll <- ggplot(plot_df, aes(x = DateObj, y = Coverage, color = Model, linetype
     theme_minimal(base_size = 11) +
     theme(
         plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
-        plot.subtitle = element_text(hjust = 0.5, size = 9.5, color = "gray30"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10, color = "gray30"),
         legend.position = "bottom",
         legend.title = element_text(face = "bold"),
         axis.title = element_text(face = "bold"),
-        panel.grid.minor = element_blank()
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "gray90", linewidth = 0.3)
     )
 
 # Save Fig 3: Coverage Evolution
-ggsave("Fig3_Coverage_Evolution.png",
+ggsave(file.path(results_dir, "Fig3_Coverage_Evolution.png"),
     p_roll,
     width = 10, height = 6,
     dpi = 300, bg = "white"
 )
 
-ggsave("Fig3_Coverage_Evolution.pdf",
+ggsave(file.path(results_dir, "Fig3_Coverage_Evolution.pdf"),
     p_roll,
     width = 10, height = 6,
-    device = cairo_pdf
+    device = pdf
 )
 
 # ----------------------------------------------------
@@ -386,8 +476,8 @@ p_covid <- ggplot(covid_df_combined, aes(x = DateObj)) +
     )
 
 # Save Fig 5: COVID Detail
-ggsave("Fig5_Covid_Detail.png", p_covid, width = 10, height = 5, dpi = 300, bg = "white")
-ggsave("Fig5_Covid_Detail.pdf", p_covid, width = 10, height = 5, device = cairo_pdf)
+ggsave(file.path(results_dir, "Fig5_Covid_Detail.png"), p_covid, width = 10, height = 5, dpi = 300, bg = "white")
+ggsave(file.path(results_dir, "Fig5_Covid_Detail.pdf"), p_covid, width = 10, height = 5)
 
 
 # Add DateObj
@@ -397,8 +487,9 @@ date_decimal_to_date <- function(d) {
     as.Date(paste(y, m, "01", sep = "-"))
 }
 results_df$DateObj <- date_decimal_to_date(results_df$Date)
+results_df$Width <- results_df$Upper - results_df$Lower
 
-write.csv(results_df, "metrics_ACI_rolling_eval.csv", row.names = FALSE)
+write.csv(results_df, file.path(results_dir, "metrics_ACI_rolling_eval.csv"), row.names = FALSE)
 
 # Re-Generate Plots (Reuse existing plot code pattern)
 # ... (omitted for brevity, will run separate or rely on existing script if compatible,
@@ -414,14 +505,18 @@ p_aci <- ggplot(results_df, aes(x = DateObj)) +
         x = "Year",
         y = "TB Incidence"
     ) +
-    theme_minimal() +
+    theme_minimal(base_size = 11) +
     theme(
-        plot.title = element_text(hjust = 0.5, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5)
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
+        plot.subtitle = element_text(hjust = 0.5, size = 10, color = "gray30"),
+        legend.position = "bottom",
+        axis.title = element_text(face = "bold"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "gray90", linewidth = 0.3)
     )
 # Save Fig 2: Incidence Forecast
-ggsave("Fig2_Incidence_Forecast.png", p_aci, width = 10, height = 6, dpi = 300, bg = "white")
-ggsave("Fig2_Incidence_Forecast.pdf", p_aci, width = 10, height = 6, device = cairo_pdf)
+ggsave(file.path(results_dir, "Fig2_Incidence_Forecast.png"), p_aci, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave(file.path(results_dir, "Fig2_Incidence_Forecast.pdf"), p_aci, width = 10, height = 6)
 
 results_df$Width <- results_df$Upper - results_df$Lower
 p_width <- ggplot(results_df, aes(x = DateObj, y = Width)) +
@@ -430,5 +525,5 @@ p_width <- ggplot(results_df, aes(x = DateObj, y = Width)) +
     theme_minimal() +
     theme(plot.title = element_text(hjust = 0.5, face = "bold"))
 # Save Fig 4: Interval Width
-ggsave("Fig4_Interval_Width.png", p_width, width = 10, height = 4, dpi = 300, bg = "white")
-ggsave("Fig4_Interval_Width.pdf", p_width, width = 10, height = 4, device = cairo_pdf)
+ggsave(file.path(results_dir, "Fig4_Interval_Width.png"), p_width, width = 10, height = 4, dpi = 300, bg = "white")
+ggsave(file.path(results_dir, "Fig4_Interval_Width.pdf"), p_width, width = 10, height = 4)

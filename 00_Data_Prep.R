@@ -3,15 +3,39 @@
 library(tidyverse)
 library(lubridate)
 library(forecast)
-library(Rlibeemd)
+has_eemd <- require("Rlibeemd", quietly = TRUE)
+if (!has_eemd) {
+  warning("Rlibeemd package not found. Performance may be degraded as fallbacks will be used.")
+}
 tryCatch(library(bsts), error = function(e) warning("bsts package not found"))
 library(zoo)
 
-set.seed(123123)
+# Robust Path Resolution
+find_results_dir <- function() {
+  if (dir.exists("results")) {
+    return("results")
+  }
+  if (dir.exists("../../results")) {
+    return("../../results")
+  }
+  if (dir.exists("../results")) {
+    return("../results")
+  }
+  return("results") # Fallback
+}
+results_dir <- find_results_dir()
+cat(sprintf("Using results directory: %s\n", normalizePath(results_dir)))
+
+if (!dir.exists(results_dir)) dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
+
+set.seed(2025)
 
 # 1) Read data + build ts
-tb_raw <- read.csv("tb_monthly_incidence_ph_2002_2023_per100k.csv")
-tb_raw
+csv_path <- "tb_monthly_incidence_ph_2002_2023_per100k.csv"
+if (!file.exists(csv_path) && file.exists(file.path(results_dir, csv_path))) {
+  csv_path <- file.path(results_dir, csv_path)
+}
+tb_raw <- read.csv(csv_path)
 
 # Normalize column names for matching
 nm0 <- names(tb_raw)
@@ -172,7 +196,6 @@ cat(
 cat("Total IMFs:", K_total, "Split at K-2 =", K_total - 2, "\n")
 split <- choose_imf_split(imfs_train, L_slow = L_slow)
 cat("Starting NARNN loop...\n")
-set.seed(123123)
 # FAST -> NARNN
 fc_fast <- matrix(0, nrow = h, ncol = length(split$narnn))
 for (j in seq_along(split$narnn)) {
@@ -331,7 +354,6 @@ metrics_holdout_inc <- tibble(
   filter(!is.na(RMSE))
 
 
-
 cat("\n--- HOLDOUT METRICS (COUNT) ---\n")
 print(metrics_holdout_counts)
 cat("\n--- HOLDOUT METRICS (INCIDENCE) ---\n")
@@ -383,10 +405,10 @@ metrics_covid <- tibble(
 
 cat("\n--- COVID PERIOD METRICS (2020-2021) ---\n")
 print(metrics_covid)
-write_csv(metrics_covid, "metrics_covid_period_fixed.csv") # Table 2 Source
+write_csv(metrics_covid, file.path(results_dir, "metrics_covid_period_fixed.csv")) # Table 2 Source
 
-write_csv(metrics_holdout_counts, "metrics_holdout_counts_fixed.csv")
-write_csv(metrics_holdout_inc, "metrics_holdout_incidence_fixed.csv")
+write_csv(metrics_holdout_counts, file.path(results_dir, "metrics_holdout_counts_fixed.csv"))
+write_csv(metrics_holdout_inc, file.path(results_dir, "metrics_holdout_incidence_fixed.csv"))
 
 # -----------------
 # 8c) PERIODIC INTERVAL METRICS (BSTS - for Table 3)
@@ -441,7 +463,7 @@ if (all(is.na(bsts_count_fc)) && all(is.na(bsts_z_l95))) {
 
 cat("\n--- PERIODIC INTERVAL METRICS (BSTS) ---\n")
 print(metrics_bsts_periodic)
-write_csv(metrics_bsts_periodic, "metrics_bsts_intervals_periodic.csv")
+write_csv(metrics_bsts_periodic, file.path(results_dir, "metrics_bsts_intervals_periodic.csv"))
 
 
 # ----------------------------
@@ -547,8 +569,8 @@ roll_summary <- roll_tbl %>%
 cat("\n--- ROLLING SUMMARY (COUNT + INCIDENCE RMSE) ---\n")
 print(roll_summary)
 
-write_csv(roll_tbl, "metrics_rolling_counts_inc_fixed.csv")
-write_csv(roll_summary, "metrics_rolling_summary_counts_inc_fixed.csv")
+write_csv(roll_tbl, file.path(results_dir, "metrics_rolling_counts_inc_fixed.csv"))
+write_csv(roll_summary, file.path(results_dir, "metrics_rolling_summary_counts_inc_fixed.csv"))
 
 # ----------------------------
 # 10) Export holdout forecasts + Date-safe plots (INCIDENCE)
@@ -578,7 +600,7 @@ fc_df <- tibble(
   SARIMA_Inc_U95 = sarima_inc_u95
 )
 
-write_csv(fc_df, "forecasts_holdout_counts_then_incidence_fixed.csv")
+write_csv(fc_df, file.path(results_dir, "forecasts_holdout_counts_then_incidence_fixed.csv"))
 
 obs_df <- tb %>% transmute(
   Date = as.Date(Date), Count = Count,
@@ -658,10 +680,10 @@ p_inc <- ggplot() +
   # COVID period shading
   annotate(
     "rect",
-    xmin = as.Date("2020-01-01"),
+    xmin = as.Date("2020-03-01"),
     xmax = as.Date("2021-12-31"),
     ymin = -Inf, ymax = Inf,
-    fill = "red", alpha = 0.05
+    fill = "red", alpha = 0.1
   ) +
 
   # COVID label
@@ -723,16 +745,16 @@ p_inc <- ggplot() +
   )
 
 # Save high-resolution
-ggsave("Figure1_Incidence_Forecast.png",
+ggsave(file.path(results_dir, "Fig2_Incidence_Forecast.png"),
   p_inc,
   width = 12, height = 6,
   dpi = 300, bg = "white"
 )
 
-ggsave("Figure1_Incidence_Forecast.pdf",
+ggsave(file.path(results_dir, "Fig2_Incidence_Forecast.pdf"),
   p_inc,
   width = 12, height = 6,
-  device = cairo_pdf
+  device = pdf
 )
 
 

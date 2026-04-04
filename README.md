@@ -15,47 +15,46 @@ The code implements a robust forecasting framework that integrates:
 
 ## Contents
 
-### Scripts
-- **`00_Data_Prep.R`**: Initial data loading, transformation (log-scale), and splitting (Train/Test).
-- **`01_Baseline_Models.R`**: Benchmarking against standard Seasonal ARIMA (SARIMA) with static prediction intervals.
-- **`02_Proposed_Method_ACI.R`**: The core implementation of the Hybrid model + ACI mechanism. Generates the main forecast datasets.
-- **`03_Simulation_Validation.R`**: A parallelized Monte Carlo simulation study (N=1000 scenarios) to validate ACI coverage under synthetic structural breaks.
-- **`generate_manuscript_plots.R`**: Dedicated script to generate high-quality **PDF/Vector figures** (Figures 1-6) as presented in the manuscript.
-- **`generate_sim_plot.R`**: Visualization script for the simulation results.
+### Main Replication Scripts (Philippines_Poro)
+- **`00_Data_Prep.R`**: Initial data loading, scaling, and splitting.
+- **`01_Baseline_Models.R`**: Benchmarking against standard SARIMA and BSTS (Table 2).
+- **`02_Proposed_Method_ACI.R`**: Core implementation of Hybrid model + ACI (**Generation of Figure 4**).
+- **`03_Simulation_Validation.R`**: Parallelized Monte Carlo simulation (N=1000) for coverage validation (**Generation of Figure 6**).
+- **`04_Sensitivity_Analysis.R`**: Grid search across adaptive parameters $\lambda$ and $W$ (**Generation of Figure 3**).
+- **`05_optuna_optimize.py`**: Bayesian hyperparameter optimization using Optuna (**Generation of Figure 2**).
+- **`07_Baseline_Prophet_LSTM.R`**: Implementation of modern ML baselines (Prophet, LSTM) for performance comparison.
+- **`08_SPCI_Baseline.R`**: Implementation of the SPCI conformal baseline.
+- **`09_ACI_SARIMA_Ablation.R`**: Ablation study comparing ACI directly on SARIMA vs. Hybrid.
+- **`generate_manuscript_plots.R`**: Generates high-quality results for **Figures 1-8** as presented in the *Scientific Reports* manuscript.
+
+### External Validation (Brazil_SRAG)
+- **`Brazil_SRAG/00_Data_Prep_SRAG.R`**: Preparation of Brazilian SRAG incidence data.
+- **`Brazil_SRAG/01_Brazil_ACI_Analysis.R`**: Generalizability testing on the Brazilian dataset (**Generation of Figure 7 and Figure 8**).
 
 ## Data Availability
-**Note on Privacy:** The raw monthly TB surveillance data used in the manuscript (Poro, Cebu) contains sensitive health information and **cannot be shared publicly**. 
-
-Users should replace the input data in `00_Data_Prep.R` with their own time-series data. The expected format is a CSV with columns: `Date` (YYYY-MM-DD), `Count` (Cases), and `Population` (for incidence calculation).
-
-## Requirements
-- R Version >= 4.0
-- Key Packages: `tidyverse`, `forecast`, `Rlibeemd`, `doParallel`, `foreach`, `ggplot2`, `scales`, `patchwork`
+**Note on Privacy:** The monthly TB surveillance data for Poro, Cebu contains sensitive health info and **cannot be shared publicly**. The Brazilian SRAG data is publicly available via SIVEP-Gripe; a processed subset is provided in `brazil_sivep_gripe.csv`.
 
 ## Usage
-Run the scripts in numerical order for full reproduction:
+Run the main scripts in numerical order for full reproduction:
 
 ```R
-# 1. Prepare Data
+# 1. Prepare Data & Run Models
 source("00_Data_Prep.R")
-
-# 2. Run Baseline Models
 source("01_Baseline_Models.R")
-
-# 3. Run Proposed Method (ACI)
 source("02_Proposed_Method_ACI.R")
 
-# 4. Generate Publication Figures
-source("generate_manuscript_plots.R")
-
-# 5. Run Simulation Study
+# 2. Run Validation & Analysis
 source("03_Simulation_Validation.R")
+source("04_Sensitivity_Analysis.R")
+
+# 3. Generate Publication Figures (Scientfic Reports Fig 1-9)
+source("generate_manuscript_plots.R")
 ```
 
 ## Citation
 If you use this code or method, please cite:
 
-> Abordo, J.P. & Nads, A.A. (2025). Adaptive Conformal Inference for Robust Tuberculosis Forecasting Under Pandemic-Induced Distribution Shifts. *Epidemics* (Submitted).
+> Abordo, J.P. & Nads, A.A. (2025). Adaptive Conformal Inference for Robust Tuberculosis Forecasting Under Pandemic-Induced Distribution Shifts. *Scientific Reports* (Submitted).
 
 ## License
 MIT License. See `LICENSE` file for details.
